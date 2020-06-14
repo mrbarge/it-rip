@@ -7,15 +7,125 @@
 
 #define DELETE_SAMPLE "DELETE FROM sample WHERE modfile = ?"
 
-#define INSERT_MODFILE "REPLACE INTO modfile(title, filename) VALUES (?,?)"
+#define INSERT_MODFILE "REPLACE INTO modfile(title, filename, date) VALUES (?,?,STR_TO_DATE(?,'%Y-%m-%d'))"
+
+#define DELETE_SAMPLE "DELETE FROM sample WHERE modfile = ?"
 
 #define INSERT_SAMPLE "INSERT INTO sample(name, filename, sha256, modfile, pos, len) VALUES (?,?,?,?,?,?)"
 
-
-void insert_modfile(MYSQL *mysql, char *name, char *file) {
+void delete_sample(MYSQL *mysql, char *modfile) {
 
     MYSQL_STMT    *stmt;
-    MYSQL_BIND    bind[2];
+    MYSQL_BIND    bind[1];
+
+    stmt = mysql_stmt_init(mysql);
+    if (!stmt) {
+        fprintf(stderr, " mysql_stmt_init(), out of memory\n");
+        exit(0);
+    }
+    if (mysql_stmt_prepare(stmt, DELETE_SAMPLE, strlen(DELETE_SAMPLE)))
+    {
+        fprintf(stderr, " mysql_stmt_prepare(), INSERT failed\n");
+        fprintf(stderr, " %s\n", mysql_stmt_error(stmt));
+        exit(0);
+    }
+
+    memset(bind, 0, sizeof(bind));
+
+    unsigned long l = strlen(modfile);
+    bind[0].buffer_type= MYSQL_TYPE_STRING;
+    bind[0].buffer= (char *) modfile;
+    bind[0].buffer_length= strlen(modfile);
+    bind[0].is_null= 0;
+    bind[0].length= &l;
+
+    if (mysql_stmt_bind_param(stmt, bind))
+    {
+        fprintf(stderr, " mysql_stmt_bind_param() failed\n");
+        fprintf(stderr, " %s\n", mysql_stmt_error(stmt));
+    }
+
+    if (mysql_stmt_execute(stmt))
+    {
+        fprintf(stderr, " mysql_stmt_execute(), 1 failed\n");
+        fprintf(stderr, " %s\n", mysql_stmt_error(stmt));
+    }
+}
+
+void insert_sample(MYSQL *mysql, char *name, char *samplefile, char *checksum, char *modfile, int pos, int sample_len) {
+
+    MYSQL_STMT    *stmt;
+    MYSQL_BIND    bind[6];
+
+    stmt = mysql_stmt_init(mysql);
+    if (!stmt) {
+        fprintf(stderr, " mysql_stmt_init(), out of memory\n");
+        exit(0);
+    }
+    if (mysql_stmt_prepare(stmt, INSERT_SAMPLE, strlen(INSERT_SAMPLE)))
+    {
+        fprintf(stderr, " mysql_stmt_prepare(), INSERT failed\n");
+        fprintf(stderr, " %s\n", mysql_stmt_error(stmt));
+        exit(0);
+    }
+
+    memset(bind, 0, sizeof(bind));
+
+    unsigned long l = strlen(name);
+    bind[0].buffer_type= MYSQL_TYPE_STRING;
+    bind[0].buffer= (char *) name;
+    bind[0].buffer_length= strlen(name);
+    bind[0].is_null= 0;
+    bind[0].length= &l;
+
+    unsigned long l2 = strlen(samplefile);
+    bind[1].buffer_type= MYSQL_TYPE_STRING;
+    bind[1].buffer= (char *) samplefile;
+    bind[1].buffer_length= strlen(samplefile);
+    bind[1].is_null= 0;
+    bind[1].length= &l2;
+
+    unsigned long l3 = strlen(checksum);
+    bind[2].buffer_type= MYSQL_TYPE_STRING;
+    bind[2].buffer= (char *) checksum;
+    bind[2].buffer_length= strlen(checksum);
+    bind[2].is_null= 0;
+    bind[2].length= &l3;
+
+    unsigned long l4 = strlen(modfile);
+    bind[3].buffer_type= MYSQL_TYPE_STRING;
+    bind[3].buffer= (char *) modfile;
+    bind[3].buffer_length= strlen(modfile);
+    bind[3].is_null= 0;
+    bind[3].length= &l4;
+
+    bind[4].buffer_type= MYSQL_TYPE_LONG;
+    bind[4].buffer= &pos;
+    bind[4].is_null= 0;
+    bind[4].length= 0;
+
+    bind[5].buffer_type= MYSQL_TYPE_LONG;
+    bind[5].buffer= &sample_len;
+    bind[5].is_null= 0;
+    bind[5].length= 0;
+
+    if (mysql_stmt_bind_param(stmt, bind))
+    {
+        fprintf(stderr, " mysql_stmt_bind_param() failed\n");
+        fprintf(stderr, " %s\n", mysql_stmt_error(stmt));
+    }
+
+    if (mysql_stmt_execute(stmt))
+    {
+        fprintf(stderr, " mysql_stmt_execute(), 1 failed\n");
+        fprintf(stderr, " %s\n", mysql_stmt_error(stmt));
+    }
+}
+
+void insert_modfile(MYSQL *mysql, char *name, char *file, char *date) {
+
+    MYSQL_STMT    *stmt;
+    MYSQL_BIND    bind[3];
 
     stmt = mysql_stmt_init(mysql);
     if (!stmt) {
@@ -44,6 +154,13 @@ void insert_modfile(MYSQL *mysql, char *name, char *file) {
     bind[1].buffer_length= strlen(file);
     bind[1].is_null= 0;
     bind[1].length= &l2;
+
+    unsigned long l3 = strlen(date);
+    bind[2].buffer_type= MYSQL_TYPE_STRING;
+    bind[2].buffer= (char *) date;
+    bind[2].buffer_length= strlen(date);
+    bind[2].is_null= 0;
+    bind[2].length= &l3;
 
     if (mysql_stmt_bind_param(stmt, bind))
     {
@@ -79,7 +196,14 @@ static void rip_samples(MYSQL *con, char *filename, struct xmp_module_info *mi) 
     int i, j;
     struct xmp_module *mod = mi->mod;
 
-    insert_modfile(con, mod->name, filename);
+    char *filebase = strrchr(filename, '/');
+    if (filebase == NULL) {
+        filebase = filename;
+    } else {
+        filebase += 1;
+    }
+    insert_modfile(con, mod->name, filebase, "2020-01-01");
+    delete_sample(con, filebase);
 
     printf("Samples:\n");
     for (i = 0; i < mod->smp; i++) {
@@ -100,7 +224,7 @@ static void rip_samples(MYSQL *con, char *filename, struct xmp_module_info *mi) 
             for (len = 0; len < SHA256_DIGEST_LENGTH; len++)
                 sprintf(checksum + (len * 2), "%02x", buffer[len]);
             checksum[64] = '\0';
-            fprintf(stderr,"%s\n", checksum);
+            insert_sample(con, smp->name, smp->name, checksum, filebase, i, smp->len);
         }
     }
 }
@@ -110,7 +234,6 @@ int main(int argc, char **argv)
     static xmp_context ctx;
     static struct xmp_module_info mi;
     int i;
-
     MYSQL *con = get_db_con("", "", "", "", 3306);
 
     ctx = xmp_create_context();
